@@ -1,80 +1,85 @@
-🧹 Privacy Janitor Environment
+---
+title: Privacy Janitor Environment
+emoji: 🧹
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
 
-A Meta OpenEnv Hackathon Submission
+# Privacy Janitor Environment
 
-Privacy Janitor is a dynamic, scalable Reinforcement Learning (RL) environment built strictly to the Meta OpenEnv specification.
+🧹 **Privacy Janitor Environment**
 
-In this environment, an AI agent acts as an automated data privacy officer. Its mission is to navigate a simulated virtual file system (VFS), locate hidden Personally Identifiable Information (PII) amongst decoy files, and successfully redact the sensitive data using Regular Expressions (Regex) before hitting the step limit.
+A Meta OpenEnv Hackathon submission.
 
-🚀 Architecture & Compliance Highlights
+Privacy Janitor is a dynamic, scalable Reinforcement Learning (RL) environment built to the Meta OpenEnv specification. In this environment, an AI agent acts as an automated data privacy officer. Its mission is to navigate a simulated virtual file system (VFS), locate hidden Personally Identifiable Information (PII) among decoy files, and redact the sensitive data using regular expressions (regex) before hitting the step limit.
 
-This submission was explicitly engineered to pass all automated OpenEnv grading requirements:
+## 🚀 Architecture & Compliance Highlights
 
-Dynamic Task Generation: Implements 3 distinct difficulty tiers (easy, medium, hard) using procedural generation to scale the "haystack" (decoy files) and the "needles" (PII) to prevent model memorization.
+This submission was explicitly engineered to pass automated OpenEnv grading requirements.
 
-Strict Grader Compliance: The score() endpoint mathematically tracks PII redaction, returning a strict 0.0 to 1.0 float, with epsilon clamping to allow for partial credit.
+- **Dynamic Task Generation**: Implements three difficulty tiers (`easy`, `medium`, `hard`) using procedural generation to scale the "haystack" (decoy files) and the "needles" (PII), preventing model memorization.
+- **Strict Grader Compliance**: The `score()` endpoint tracks PII redaction and returns a strict `0.0` to `1.0` float, with epsilon clamping to allow for partial credit.
+- **Clean State Management**: Fully stateless between episodes. State is tracked via a Pydantic `@property` (`PrivacyJanitorState`), enabling reliable grader serialization and auditing.
+- **Modern Docker Build**: Uses a multi-stage BuildKit `Dockerfile` and the Hatchling build backend to package flat directories safely and satisfy strict package constraints.
 
-Clean State Management: Fully stateless architecture between episodes. State is tracked via a strictly typed Pydantic @property (PrivacyJanitorState), allowing the OpenEnv grader flawless serialization and auditing.
+## 🕹️ Action & Observation Space
 
-Modern Docker Build: Utilizes a multi-stage BuildKit Dockerfile and the hatchling build backend to safely package flat directories, satisfying strict uv package manager constraints.
+### Sensible Action Space
 
-🕹️ Action & Observation Space
+The agent interacts with a strongly typed Pydantic `Action` model using two commands:
 
-Sensible Action Space
+- `read_file`
+  - Requires a `path`
+  - Returns file contents into the observation space
+- `redact`
+  - Requires a `path` and a `pattern` (regex string)
+  - Applies the regex and replaces matches with `[REDACTED]`
 
-The agent interacts using a strictly typed Pydantic Action model with two commands:
+### Informative Observation Space
 
-read_file: Requires a path. Returns the contents of the file into the observation space.
+The observation is designed to prevent cheating while giving the agent a clear path forward.
 
-redact: Requires a path and a pattern (regex string). Applies the regex and replaces matches with [REDACTED].
+- `files`: list of available files in the current directory
+- `content_preview`: only populated when the agent explicitly uses `read_file`
+- `message`: instant feedback such as `Redacted 2 instance(s). Progress: 2/5`
 
-Informative Observation Space
+## 🧠 Reward Shaping & Episode Boundaries
 
-The Observation prevents "cheating" while giving the agent a clear path forward:
+This environment is optimized for stable RL training.
 
-files: A list of available files in the current directory.
+- **Incremental Rewards**: The agent receives `0.5 * matches` for every successful redaction, creating a reward trail that teaches correct behavior before episodes end.
+- **Completion Bonus**: Successfully hitting the required redactions yields a maximum reward of `1.0`.
+- **Epsilon Clamping**: All rewards are clamped between `0.0001` and `0.9999` to satisfy OpenEnv compliance and prevent gradient instability.
+- **Strict Episode Boundaries**: Episodes terminate on success or when the hard step limit of `20` steps is reached.
 
-content_preview: Only populates when the agent explicitly uses the read_file action.
+## 📁 Repository Structure
 
-message: Provides instant feedback (e.g., "Redacted 2 instance(s). Progress: 2/5").
-
-🧠 Reward Shaping & Episode Boundaries
-
-This environment is designed for stable RL training with excellent reward shaping:
-
-Incremental Rewards: The agent receives 0.5 * matches for every successful redaction. This creates a breadcrumb trail, teaching the agent it is performing the correct actions before the episode ends.
-
-Completion Bonus: Reaching the required number of redactions yields a max reward of 1.0.
-
-Epsilon Clamping: All rewards are strictly clamped between 0.0001 and 0.9999 to ensure OpenEnv framework compliance and prevent gradient explosions.
-
-Strict Episode Boundaries: Episodes terminate upon absolute success or when a hard step limit (20 steps) is reached.
-
-📁 Repository Structure
-
+```text
 privacy-janitor-env/
-├── pyproject.toml              # Build backend and dependencies (replaces setuptools)
-├── models.py                   # Pydantic schemas (Action, Observation)
-├── inference.py                # Baseline agent testing script
-├── Dockerfile                  # Official Meta OpenEnv BuildKit instructions
-├── README.md                   
+├── pyproject.toml                      # Build backend and dependencies
+├── models.py                           # Pydantic schemas (Action, Observation)
+├── inference.py                        # Baseline agent testing script
+├── Dockerfile                          # Official Meta OpenEnv BuildKit instructions
+├── README.md
 └── server/
-    ├── app.py                  # OpenEnv FastAPI wrapper
-    └── privacy_janitor_environment.py # Core simulation and dynamic generation logic
+    ├── app.py                          # OpenEnv FastAPI wrapper
+    └── privacy_janitor_environment.py  # Core simulation and dynamic generation logic
+```
 
+## 🚀 How to Run
 
-🚀 How to Run
+### Via OpenEnv Web Interface
 
-Via OpenEnv Web Interface
+This environment supports the built-in OpenEnv Human-in-the-Loop web UI for manual testing:
 
-This environment supports the built-in OpenEnv Human-in-the-Loop Web UI for manual testing:
+1. Navigate to the Hugging Face Space endpoint.
+2. Trigger `read_file` and `redact` commands to verify environment behavior.
 
-Navigate to the Hugging Face Space endpoint.
+### Via API (RL Agent)
 
-Manually trigger read_file and redact commands to test the environment logic.
-
-Via API (RL Agent)
-
+```python
 import requests
 
 # 1. Reset the environment (Choose difficulty: easy, medium, hard)
@@ -88,3 +93,5 @@ action = {
 }
 step_response = requests.post("YOUR_HF_SPACE_URL/step", json=action)
 print(step_response.json())
+```
+
