@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privacy_janitor"
+version = "0.1.0"
+description = "Privacy Janitor environment for OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.6.0",
+    "requests>=2.31.0"
+]
+
+[project.scripts]
+# This is the exact entry point the validator was looking for
+server = "privacy_janitor.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+# This magic block tells 'uv' to treat your flat files as a proper package
+packages = ["privacy_janitor", "privacy_janitor.server"]
+package-dir = { "privacy_janitor" = ".", "privacy_janitor.server" = "server" }
