@@ -1,41 +1,53 @@
 import os
 import json
 import re
+import time
 from openai import OpenAI
 from server.privacy_janitor_environment import PrivacyJanitorEnvironment
 from models import PrivacyJanitorAction
 
-# 1. Official Hackathon Environment Variables
+# Official Hackathon Environment Variables for OpenAI-compatible HF API
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME") or "meta-llama/Meta-Llama-3-8B-Instruct"
-MAX_STEPS = 25
+
+MAX_STEPS = 25 
+TASK_ID = "easy" # Switch to "easy" or "medium" or 'hard' as needed
 
 def extract_json(text_response):
     """Helper to clean up output if the LLM wraps the JSON in markdown blocks."""
+    if not text_response:
+        return None
     match = re.search(r'\{.*\}', text_response.replace('\n', ''))
     if match:
-        return json.loads(match.group(0))
-    try:
-        return json.loads(text_response)
-    except json.JSONDecodeError:
-        return None
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
 
 def main():
-    env = PrivacyJanitorEnvironment()
-    obs = env.reset(task_id="easy")  # You can choose "easy", "medium", or "hard"
+    # Ensure API Key is present
+    if not API_KEY:
+        print("--- ERROR: API_KEY or HF_TOKEN environment variable is missing ---")
+        return
 
+    env = PrivacyJanitorEnvironment()
+    obs = env.reset(task_id=TASK_ID)
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    print(f"🧹 Privacy Janitor Agent Activated using model: {MODEL_NAME}...\n")
-    print(f"Initial State: {obs.message}\n")
+    # --- EPISODE START ---
+    print(f"--- EPISODE START: {TASK_ID.upper()} ---")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Task: Find and redact {env.total_pii_to_find} PII items.")
+    print(f"Files in VFS: {obs.files}\n")
 
-    # NEW: We give the agent memory to track what it has already checked
     visited_files = []
-    current_target = None
+    total_accumulated_reward = 0.0
 
     for step in range(1, MAX_STEPS + 1):
-        print(f"--- Step {step} ---")
+        # --- STEP LOGGING ---
+        print(f"--- STEP {step} ---")
         
         prompt = f"""
                 You are a strict Data Privacy AI. 
@@ -50,8 +62,8 @@ def main():
                 Schema: {{"command": "read_file" | "redact", "path": "filename", "pattern": "string_to_redact"}}
                 
                 CRITICAL RULES:
-                1. ANALYZE CONTENT: If the 'Content Preview' contains sensitive data (like an email, phone number, or SSN), immediately output a JSON with the "redact" command. The 'path' must be the file you just read, and the 'pattern' must be the exact sensitive string.
-                2. EXPLORE: If the 'Content Preview' does NOT contain sensitive data, or is empty, pick a new file from 'Available Files' that is NOT in 'Files Already Checked' and output a JSON with the "read_file" command to inspect it.
+                1. ANALYZE CONTENT: If the 'Content Preview' contains sensitive data (email, phone, or SSN), redact it.
+                2. EXPLORE: If not, "read_file" a file from 'Available Files' NOT in 'Files Already Checked'.
                 """
         
         try:
@@ -70,33 +82,36 @@ def main():
                 raise ValueError("Could not parse JSON")
                 
         except Exception as exc:
-            print(f"⚠️ Model request failed or invalid format ({exc}). Using fallback.")
-            # Fallback to reading a random unvisited file
+            # Fallback exploration logic if the model fails
             unvisited = [f for f in obs.files if f not in visited_files]
-            fallback_target = unvisited[0] if unvisited else obs.files[0]
-            action = PrivacyJanitorAction(command="read_file", path=fallback_target, pattern="")
+            target = unvisited[0] if unvisited else obs.files[0]
+            action = PrivacyJanitorAction(command="read_file", path=target, pattern="")
             
-        print(f"🤖 Agent Decided: {action.command} on '{action.path}'")
+        print(f"ACTION: {action.command} on '{action.path}'")
         
-        # NEW: Update the agent's memory
+        # Update memory
         if action.command == "read_file" and action.path not in visited_files:
             visited_files.append(action.path)
-            current_target = action.path
             
-        # Execute the action in the environment
+        # Environment Step
         obs = env.step(action)
-        print(f"💰 Reward Earned: {obs.reward}")
-        print(f"👀 Result: {obs.message}\n")
+        total_accumulated_reward += obs.reward
+        
+        print(f"REWARD: {obs.reward}")
+        print(f"OBSERVATION: {obs.message}")
+        print(f"PROGRESS: {env.redacted_pii_count}/{env.total_pii_to_find}\n")
         
         if obs.done:
-            print("🏁 Task Completed by Agent!")
+            # --- END EPISODE ---
+            print(f"--- EPISODE END: SUCCESS ---")
+            print(f"Final Redaction Count: {env.redacted_pii_count}")
+            print(f"Total Steps: {step}")
+            print(f"Accumulated Reward: {total_accumulated_reward:.4f}")
             break
             
     else:
+        print(f"--- EPISODE END: TIMEOUT ---")
         print(f"Reached max steps ({MAX_STEPS}).")
 
 if __name__ == "__main__":
-    if not API_KEY:
-        print("❌ Error: API_KEY or HF_TOKEN environment variable is missing.")
-    else:
-        main()
+    main()
