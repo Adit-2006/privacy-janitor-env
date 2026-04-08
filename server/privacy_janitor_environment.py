@@ -21,21 +21,38 @@ class PrivacyJanitorState(State):
     files_count: int = 0
     vfs_snapshot: dict = Field(default_factory=dict)
 
-# NEW: Standalone grader function required by Phase 2 Validation.
-# It strictly accepts a State object and calculates the score offline.
-def janitor_grader(state: PrivacyJanitorState) -> float:
+# FIX: Make the grader robust to both objects and dicts for the offline validator
+def janitor_grader(state: Any) -> float:
     epsilon = 0.0001
     try:
-        if state.total_to_find <= 0:
+        # The validator might pass a raw dict instead of the full State object
+        if isinstance(state, dict):
+            total = state.get("total_to_find", 0)
+            redacted = state.get("redacted_count", 0)
+        else:
+            total = getattr(state, "total_to_find", 0)
+            redacted = getattr(state, "redacted_count", 0)
+
+        if total <= 0:
             return float(epsilon)
-        calculated_score = float(state.redacted_count) / state.total_to_find
+        
+        calculated_score = float(redacted) / float(total)
         return float(max(epsilon, min(1.0 - epsilon, calculated_score)))
     except Exception:
         return float(epsilon)
 
 class PrivacyJanitorEnvironment(Environment):
+    
+    # THE FIX: Define tasks at the CLASS LEVEL.
+    # The validator inspects the file statically before __init__ is called.
+    tasks = {
+        "easy": janitor_grader,
+        "medium": janitor_grader,
+        "hard": janitor_grader
+    }
+
     def __init__(self):
-        super().__init__() # Good practice to initialize the parent class
+        super().__init__()
         self.vfs = {}
         self.total_pii_to_find = 0
         self.redacted_pii_count = 0
@@ -43,17 +60,6 @@ class PrivacyJanitorEnvironment(Environment):
         self.task_id = "easy"
         self.episode_id = "initial"
 
-    # THE FIX: Return a clean dictionary mapping tasks to the standalone grader
-    @property
-    def tasks(self) -> Dict[str, Callable[[State], float]]:
-        """Return the dictionary of tasks and graders for OpenEnv validation."""
-        return {
-            "easy": janitor_grader,
-            "medium": janitor_grader,
-            "hard": janitor_grader
-        }
-
-    # FIX: Shifted reset() to the left so it's a proper class method
     def reset(
         self, 
         seed: Optional[int] = None, 
@@ -111,7 +117,6 @@ class PrivacyJanitorEnvironment(Environment):
             done=False
         )
 
-    # We keep score() for backwards compatibility with your inference.py script
     def score(self) -> float:
         return janitor_grader(self.state)
 
