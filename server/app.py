@@ -5,6 +5,9 @@
 FastAPI application for the Privacy Janitor Environment.
 """
 
+from typing import Literal, Optional
+from pydantic import BaseModel, Field
+
 try:
     from openenv.core.env_server.http_server import create_app
 except ImportError as e:
@@ -15,12 +18,9 @@ except ImportError as e:
 from models import PrivacyJanitorAction, PrivacyJanitorObservation
 from server.privacy_janitor_environment import PrivacyJanitorEnvironment
 
-# 1. THE FIX: Create a live instance of the environment first!
-active_environment = PrivacyJanitorEnvironment()
-
-# 2. Pass the live instance into the app creator
+# Pass the classes into the app creator (Removed the unsupported schema argument)
 app = create_app(
-    active_environment, # <-- Changed this from the Class to the Instance
+    PrivacyJanitorEnvironment,
     PrivacyJanitorAction,
     PrivacyJanitorObservation,
     env_name="privacy_janitor",
