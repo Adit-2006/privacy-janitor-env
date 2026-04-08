@@ -21,11 +21,12 @@ class PrivacyJanitorState(State):
     files_count: int = 0
     vfs_snapshot: dict = Field(default_factory=dict)
 
-# FIX: Make the grader robust to both objects and dicts for the offline validator
+# FIX: Robust standalone grader function.
+# The validator may pass a dictionary or a state object; this handles both.
 def janitor_grader(state: Any) -> float:
     epsilon = 0.0001
     try:
-        # The validator might pass a raw dict instead of the full State object
+        # Extract data regardless of whether 'state' is a dict or an object
         if isinstance(state, dict):
             total = state.get("total_to_find", 0)
             redacted = state.get("redacted_count", 0)
@@ -41,15 +42,22 @@ def janitor_grader(state: Any) -> float:
     except Exception:
         return float(epsilon)
 
+# FIX: Mock Task object to satisfy validator attribute checks
+class EnvTask(dict):
+    def __init__(self, id: str, name: str, description: str, grader: Callable):
+        super().__init__(id=id, name=name, description=description, grader=grader)
+        self.id = id
+        self.name = name
+        self.description = description
+        self.grader = grader
+
 class PrivacyJanitorEnvironment(Environment):
-    
-    # THE FIX: Define tasks at the CLASS LEVEL.
-    # The validator inspects the file statically before __init__ is called.
-    tasks = {
-        "easy": janitor_grader,
-        "medium": janitor_grader,
-        "hard": janitor_grader
-    }
+    # THE FIX: Class-level tasks list for static inspection
+    tasks = [
+        EnvTask(id="easy", name="Easy Mode", description="Find 1 PII", grader=janitor_grader),
+        EnvTask(id="medium", name="Medium Mode", description="Find 3 PII", grader=janitor_grader),
+        EnvTask(id="hard", name="Hard Mode", description="Find 5 PII", grader=janitor_grader)
+    ]
 
     def __init__(self):
         super().__init__()
@@ -67,52 +75,36 @@ class PrivacyJanitorEnvironment(Environment):
         task_id: Literal["easy", "medium", "hard"] = "easy", 
         **kwargs
     ) -> PrivacyJanitorObservation:
-        
         if seed is not None:
             random.seed(seed)
             
         self.task_id = task_id
         self.episode_id = str(episode_id) if episode_id else f"run_{random.randint(1000, 9999)}"
-        
         self.step_count = 0
         self.redacted_pii_count = 0
         self.vfs = {}
         
-        if task_id == "easy":
-            num_files, self.total_pii_to_find = 3, 1
-        elif task_id == "medium":
-            num_files, self.total_pii_to_find = 6, 3
-        elif task_id == "hard":
-            num_files, self.total_pii_to_find = 12, 5
-        else:
-            num_files, self.total_pii_to_find = 3, 1
+        config = {"easy": (3, 1), "medium": (6, 3), "hard": (12, 5)}
+        num_files, self.total_pii_to_find = config.get(task_id, (3, 1))
 
-        possible_files = [
-            "logs/app.log", "users/data.txt", "readme.md", "src/main.py", 
-            "config.json", "secret/db.csv", "temp/cache.tmp", "index.html",
-            "assets/logo.svg", "docs/api.md", "tests/test_auth.py", "docker-compose.yml"
-        ]
-        
+        possible_files = ["logs/app.log", "users/data.txt", "readme.md", "src/main.py", "config.json", "secret/db.csv"]
         selected_files = random.sample(possible_files, min(num_files, len(possible_files)))
-        for f in selected_files:
-            self.vfs[f] = f"Standard system file: {f}. Operating within normal parameters."
-
-        pii_pool = [
-            "admin@example.com", "john@doe.com", "phone:555-0199", 
-            "jane@smith.com", "card:4111-2222", "SSN:000-00-0000"
-        ]
         
+        for f in selected_files:
+            self.vfs[f] = f"System file: {f}. Parameters normal."
+
+        pii_pool = ["admin@example.com", "phone:555-0199", "SSN:000-00-0000"]
         selected_pii = random.sample(pii_pool, min(self.total_pii_to_find, len(pii_pool)))
 
         for pii in selected_pii:
             target_file = random.choice(list(self.vfs.keys()))
-            self.vfs[target_file] += f" [System trace: {pii} recorded in buffer]."
+            self.vfs[target_file] += f" [Trace: {pii} recorded]."
 
         return PrivacyJanitorObservation(
             current_path="/",
             files=list(self.vfs.keys()),
-            message=f"Environment reset. Task: {task_id}. Find and redact {self.total_pii_to_find} PII items.",
-            content_preview="Enter a file path and use 'read_file' to begin.",
+            message=f"Environment reset. Task: {task_id}. Find {self.total_pii_to_find} items.",
+            content_preview="Ready.",
             reward=0.0001,
             done=False
         )
@@ -123,60 +115,41 @@ class PrivacyJanitorEnvironment(Environment):
     def step(self, action: PrivacyJanitorAction) -> PrivacyJanitorObservation:
         self.step_count += 1
         raw_reward = 0.0
-        msg = "Action processed."
         done = False
         content_preview = ""
 
         if action.command == "read_file":
-            content_preview = self.vfs.get(action.path, "Error: File not found.")
-            msg = f"Reading content of {action.path}"
-
+            content_preview = self.vfs.get(action.path, "Error: Not found.")
+            msg = f"Reading {action.path}"
         elif action.command == "redact":
             if action.path in self.vfs and action.pattern:
-                try:
-                    matches = len(re.findall(action.pattern, self.vfs[action.path], re.IGNORECASE))
-                    if matches > 0:
-                        self.vfs[action.path] = re.sub(action.pattern, "[REDACTED]", self.vfs[action.path], flags=re.IGNORECASE)
-                        self.redacted_pii_count += matches
-                        raw_reward = 0.5 * matches
-                        
-                        if self.redacted_pii_count >= self.total_pii_to_find:
-                            done = True
-                            raw_reward = 1.0
-                            msg = "Success! All PII has been redacted."
-                        else:
-                            msg = f"Redacted {matches} instance(s). Progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
+                matches = len(re.findall(action.pattern, self.vfs[action.path], re.IGNORECASE))
+                if matches > 0:
+                    self.vfs[action.path] = re.sub(action.pattern, "[REDACTED]", self.vfs[action.path], flags=re.IGNORECASE)
+                    self.redacted_pii_count += matches
+                    raw_reward = 0.5 * matches
+                    if self.redacted_pii_count >= self.total_pii_to_find:
+                        done, raw_reward, msg = True, 1.0, "Success!"
                     else:
-                        msg = f"Pattern '{action.pattern}' not found in {action.path}."
-                except re.error:
-                    msg = "Error: Invalid regex pattern."
+                        msg = f"Progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
+                else:
+                    msg = "Pattern not found."
             else:
-                msg = "Error: Invalid path or pattern."
+                msg = "Invalid path/pattern."
+        
+        if self.step_count >= 20: done = True
 
-        if self.step_count >= 20:
-            done = True
-            msg += " (Max steps reached)"
-
-        epsilon = 0.0001
-        clamped_reward = max(epsilon, min(1.0 - epsilon, raw_reward))
-
+        reward = max(0.0001, min(0.9999, raw_reward))
         return PrivacyJanitorObservation(
-            current_path="/", 
-            files=list(self.vfs.keys()), 
-            content_preview=content_preview,
-            reward=clamped_reward,
-            message=msg,
-            done=done
+            current_path="/", files=list(self.vfs.keys()), 
+            content_preview=content_preview, reward=reward, 
+            message=msg if 'msg' in locals() else "Step processed.", done=done
         )
     
     @property
     def state(self) -> PrivacyJanitorState:
         return PrivacyJanitorState(
-            episode_id=self.episode_id,
-            step_count=self.step_count,
-            task_id=self.task_id,
-            redacted_count=self.redacted_pii_count,
-            total_to_find=self.total_pii_to_find,
-            files_count=len(self.vfs),
-            vfs_snapshot=self.vfs
+            episode_id=self.episode_id, step_count=self.step_count, task_id=self.task_id,
+            redacted_count=self.redacted_pii_count, total_to_find=self.total_pii_to_find,
+            files_count=len(self.vfs), vfs_snapshot=self.vfs
         )
