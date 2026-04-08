@@ -18,7 +18,7 @@ except ImportError as e:
 from models import PrivacyJanitorAction, PrivacyJanitorObservation
 from server.privacy_janitor_environment import PrivacyJanitorEnvironment
 
-# Pass the classes into the app creator (Removed the unsupported schema argument)
+# Pass the classes into the app creator (Removed the unsupported tasks argument)
 app = create_app(
     PrivacyJanitorEnvironment,
     PrivacyJanitorAction,
