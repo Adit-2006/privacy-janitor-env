@@ -12,7 +12,6 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME") or "meta-llama/Meta-Llama-3-8B-Instruct"
 
 MAX_STEPS = 25 
-TASK_ID = "easy" # Switch to "easy" or "medium" or 'hard' as needed
 
 def extract_json(text_response):
     """Helper to clean up output if the LLM wraps the JSON in markdown blocks."""
@@ -26,18 +25,12 @@ def extract_json(text_response):
             return None
     return None
 
-def main():
-    # Ensure API Key is present
-    if not API_KEY:
-        print("--- ERROR: API_KEY or HF_TOKEN environment variable is missing ---")
-        return
-
-    env = PrivacyJanitorEnvironment()
-    obs = env.reset(task_id=TASK_ID)
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
+def run_task(client, env, task_id):
+    """Runs a single episode for the given difficulty task."""
+    obs = env.reset(task_id=task_id)
+    
     # --- EPISODE START (VALIDATOR REQUIRED FORMAT) ---
-    print(f"[START] task={TASK_ID}", flush=True)
+    print(f"\n[START] task={task_id}", flush=True)
     print(f"Model: {MODEL_NAME}")
     print(f"Task: Find and redact {env.total_pii_to_find} PII items.")
     print(f"Files in VFS: {obs.files}\n")
@@ -46,7 +39,6 @@ def main():
     total_accumulated_reward = 0.0
 
     for step in range(1, MAX_STEPS + 1):
-        
         prompt = f"""
                 You are a strict Data Privacy AI. 
                 
@@ -80,7 +72,7 @@ def main():
                 raise ValueError("Could not parse JSON")
                 
         except Exception as exc:
-            # Fallback exploration logic if the model fails
+            # Fallback exploration logic
             unvisited = [f for f in obs.files if f not in visited_files]
             target = unvisited[0] if unvisited else obs.files[0]
             action = PrivacyJanitorAction(command="read_file", path=target, pattern="")
@@ -102,15 +94,30 @@ def main():
         
         if obs.done:
             # --- END EPISODE SUCCESS (VALIDATOR REQUIRED FORMAT) ---
-            print(f"[END] task={TASK_ID} score={env.score()} steps={step}", flush=True)
+            print(f"[END] task={task_id} score={env.score()} steps={step}", flush=True)
             print(f"Final Redaction Count: {env.redacted_pii_count}")
             print(f"Accumulated Reward: {total_accumulated_reward:.4f}")
             break
             
     else:
         # --- END EPISODE TIMEOUT (VALIDATOR REQUIRED FORMAT) ---
-        print(f"[END] task={TASK_ID} score={env.score()} steps={MAX_STEPS}", flush=True)
+        print(f"[END] task={task_id} score={env.score()} steps={MAX_STEPS}", flush=True)
         print(f"Reached max steps ({MAX_STEPS}).")
+
+def main():
+    if not API_KEY:
+        print("--- ERROR: API_KEY or HF_TOKEN environment variable is missing ---")
+        return
+
+    env = PrivacyJanitorEnvironment()
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    # --- THE CRITICAL FIX ---
+    # We must loop through ALL 3 tasks so the Validator sees 3 complete [END] blocks!
+    tasks_to_evaluate = ["easy", "medium", "hard"]
+    
+    for task in tasks_to_evaluate:
+        run_task(client, env, task)
 
 if __name__ == "__main__":
     main()
