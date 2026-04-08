@@ -1,48 +1,64 @@
 import re
 import random
-from openenv_core.env_server import Environment
+from pydantic import Field
+from typing import List, Optional, Literal, Dict, Any
+
+# Import OpenEnv's base State object
+try:
+    from openenv.core.env_server import Environment, State
+except ImportError:
+    from openenv_core.env_server import Environment, State
+
 from models import PrivacyJanitorAction, PrivacyJanitorObservation
+
+# Define a strict typed state for the Grader and Web Interface
+class PrivacyJanitorState(State):
+    episode_id: str = "initial"
+    step_count: int = 0
+    task_id: str = "easy"
+    redacted_count: int = 0
+    total_to_find: int = 0
+    files_count: int = 0
+    vfs_snapshot: dict = Field(default_factory=dict)
 
 class PrivacyJanitorEnvironment(Environment):
     def __init__(self):
-        # Initialize basic attributes to avoid AttributeErrors before first reset
+        super().__init__() # Good practice to initialize the parent class
         self.vfs = {}
         self.total_pii_to_find = 0
         self.redacted_pii_count = 0
         self.step_count = 0
         self.task_id = "easy"
         self.episode_id = "initial"
-        self.reset()
 
-    def reset(self, task_id: str = "easy", **kwargs):
-        """
-        Resets the environment for a new episode.
-        Supports task_id and arbitrary kwargs (like episode_id from Web UI).
-        """
+    # FIX: Shifted reset() to the left so it's a proper class method
+    def reset(
+        self, 
+        seed: Optional[int] = None, 
+        episode_id: Optional[str] = None, 
+        task_id: Literal["easy", "medium", "hard"] = "easy", 
+        **kwargs
+    ) -> PrivacyJanitorObservation:
+        # FIX: Indented the logic inside the reset function correctly
+        if seed is not None:
+            random.seed(seed)
+            
         self.task_id = task_id
-        # Capture episode_id if provided by the Web UI or validator
-        self.episode_id = kwargs.get("episode_id", f"run_{random.randint(1000, 9999)}")
+        self.episode_id = str(episode_id) if episode_id else f"run_{random.randint(1000, 9999)}"
         
         self.step_count = 0
         self.redacted_pii_count = 0
         self.vfs = {}
         
-        # 1. Set the difficulty parameters
         if task_id == "easy":
-            num_files = 3
-            self.total_pii_to_find = 1
+            num_files, self.total_pii_to_find = 3, 1
         elif task_id == "medium":
-            num_files = 6
-            self.total_pii_to_find = 3
+            num_files, self.total_pii_to_find = 6, 3
         elif task_id == "hard":
-            num_files = 12
-            self.total_pii_to_find = 5
+            num_files, self.total_pii_to_find = 12, 5
         else:
-            # Default fallback for unknown task_ids
-            num_files = 3
-            self.total_pii_to_find = 1
+            num_files, self.total_pii_to_find = 3, 1
 
-        # 2. Build the "Haystack" (Decoy files)
         possible_files = [
             "logs/app.log", "users/data.txt", "readme.md", "src/main.py", 
             "config.json", "secret/db.csv", "temp/cache.tmp", "index.html",
@@ -53,7 +69,6 @@ class PrivacyJanitorEnvironment(Environment):
         for f in selected_files:
             self.vfs[f] = f"Standard system file: {f}. Operating within normal parameters."
 
-        # 3. Inject the "Needles" (The PII)
         pii_pool = [
             "admin@example.com", "john@doe.com", "phone:555-0199", 
             "jane@smith.com", "card:4111-2222", "SSN:000-00-0000"
@@ -75,13 +90,9 @@ class PrivacyJanitorEnvironment(Environment):
         )
 
     def score(self) -> float:
-        """
-        Official score for the leaderboard.
-        """
         epsilon = 0.0001
         if self.total_pii_to_find <= 0:
             return float(epsilon)
-            
         calculated_score = float(self.redacted_pii_count) / self.total_pii_to_find
         final_score = max(epsilon, min(1.0 - epsilon, calculated_score))
         return float(final_score)
@@ -100,32 +111,29 @@ class PrivacyJanitorEnvironment(Environment):
         elif action.command == "redact":
             if action.path in self.vfs and action.pattern:
                 try:
-                    # Case-insensitive find to be more helpful to the agent
                     matches = len(re.findall(action.pattern, self.vfs[action.path], re.IGNORECASE))
                     if matches > 0:
                         self.vfs[action.path] = re.sub(action.pattern, "[REDACTED]", self.vfs[action.path], flags=re.IGNORECASE)
                         self.redacted_pii_count += matches
-                        raw_reward = 0.5 * matches # Individual step reward
+                        raw_reward = 0.5 * matches
                         
                         if self.redacted_pii_count >= self.total_pii_to_find:
                             done = True
-                            raw_reward = 1.0 # Completion bonus
-                            msg = "Success! All PII has been redacted from the system."
+                            raw_reward = 1.0
+                            msg = "Success! All PII has been redacted."
                         else:
-                            msg = f"Redacted {matches} instance(s). Total progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
+                            msg = f"Redacted {matches} instance(s). Progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
                     else:
                         msg = f"Pattern '{action.pattern}' not found in {action.path}."
                 except re.error:
-                    msg = "Error: Invalid regex pattern provided."
+                    msg = "Error: Invalid regex pattern."
             else:
-                msg = "Error: Invalid file path or missing pattern."
+                msg = "Error: Invalid path or pattern."
 
-        # Fail-safe termination
         if self.step_count >= 20:
             done = True
             msg += " (Max steps reached)"
 
-        # Apply epsilon clamp to reward for OpenEnv compliance
         epsilon = 0.0001
         clamped_reward = max(epsilon, min(1.0 - epsilon, raw_reward))
 
@@ -138,16 +146,14 @@ class PrivacyJanitorEnvironment(Environment):
             done=done
         )
     
-    def state(self, **kwargs) -> dict:
-        """
-        Returns the full internal state for the OpenEnv grader.
-        """
-        return {
-            "task_id": self.task_id,
-            "episode_id": self.episode_id,
-            "step_count": self.step_count,
-            "redacted_count": self.redacted_pii_count,
-            "total_to_find": self.total_pii_to_find,
-            "files_count": len(self.vfs),
-            "vfs_snapshot": self.vfs
-        }
+    @property
+    def state(self) -> PrivacyJanitorState:
+        return PrivacyJanitorState(
+            episode_id=self.episode_id,
+            step_count=self.step_count,
+            task_id=self.task_id,
+            redacted_count=self.redacted_pii_count,
+            total_to_find=self.total_pii_to_find,
+            files_count=len(self.vfs),
+            vfs_snapshot=self.vfs
+        )
