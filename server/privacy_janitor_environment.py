@@ -21,12 +21,10 @@ class PrivacyJanitorState(State):
     files_count: int = 0
     vfs_snapshot: dict = Field(default_factory=dict)
 
-# FIX: Robust standalone grader function.
-# The validator may pass a dictionary or a state object; this handles both.
+# Robust standalone grader function.
 def janitor_grader(state: Any) -> float:
     epsilon = 0.0001
     try:
-        # Extract data regardless of whether 'state' is a dict or an object
         if isinstance(state, dict):
             total = state.get("total_to_find", 0)
             redacted = state.get("redacted_count", 0)
@@ -42,7 +40,7 @@ def janitor_grader(state: Any) -> float:
     except Exception:
         return float(epsilon)
 
-# FIX: Mock Task object to satisfy validator attribute checks
+# Mock Task object to satisfy validator attribute checks
 class EnvTask(dict):
     def __init__(self, id: str, name: str, description: str, grader: Callable):
         super().__init__(id=id, name=name, description=description, grader=grader)
@@ -52,7 +50,7 @@ class EnvTask(dict):
         self.grader = grader
 
 class PrivacyJanitorEnvironment(Environment):
-    # THE FIX: Class-level tasks list for static inspection
+    # Class-level tasks list for static inspection
     tasks = [
         EnvTask(id="easy", name="Easy Mode", description="Find 1 PII", grader=janitor_grader),
         EnvTask(id="medium", name="Medium Mode", description="Find 3 PII", grader=janitor_grader),
@@ -67,6 +65,7 @@ class PrivacyJanitorEnvironment(Environment):
         self.step_count = 0
         self.task_id = "easy"
         self.episode_id = "initial"
+        self.active_pii = [] # NEW: Track exactly what needs to be found
 
     def reset(
         self, 
@@ -83,6 +82,7 @@ class PrivacyJanitorEnvironment(Environment):
         self.step_count = 0
         self.redacted_pii_count = 0
         self.vfs = {}
+        self.active_pii = [] 
         
         config = {"easy": (3, 1), "medium": (6, 3), "hard": (12, 5)}
         num_files, self.total_pii_to_find = config.get(task_id, (3, 1))
@@ -93,10 +93,25 @@ class PrivacyJanitorEnvironment(Environment):
         for f in selected_files:
             self.vfs[f] = f"System file: {f}. Parameters normal."
 
-        pii_pool = ["admin@example.com", "phone:555-0199", "SSN:000-00-0000"]
-        selected_pii = random.sample(pii_pool, min(self.total_pii_to_find, len(pii_pool)))
+        domains = ["example.com", "test.org", "company.net", "corp.local"]
+        names = ["admin", "john.doe", "jane.smith", "user99", "sysadmin"]
+        
+        generated_pii = []
+        for _ in range(self.total_pii_to_find):
+            pii_type = random.choice(["email", "ssn", "card", "phone"])
+            if pii_type == "email":
+                generated_pii.append(f"{random.choice(names)}@{random.choice(domains)}")
+            elif pii_type == "ssn":
+                generated_pii.append(f"SSN:{random.randint(100,999)}-{random.randint(10,99)}-{random.randint(1000,9999)}")
+            elif pii_type == "phone":
+                generated_pii.append(f"phone:555-{random.randint(1000,9999)}")
+            else:
+                generated_pii.append(f"card:4111-{random.randint(1000,9999)}-{random.randint(1000,9999)}")
 
-        for pii in selected_pii:
+        # Save exact targets
+        self.active_pii = generated_pii.copy()
+
+        for pii in generated_pii:
             target_file = random.choice(list(self.vfs.keys()))
             self.vfs[target_file] += f" [Trace: {pii} recorded]."
 
@@ -117,23 +132,51 @@ class PrivacyJanitorEnvironment(Environment):
         raw_reward = 0.0
         done = False
         content_preview = ""
+        msg = "Action processed."
 
         if action.command == "read_file":
             content_preview = self.vfs.get(action.path, "Error: Not found.")
             msg = f"Reading {action.path}"
+            
         elif action.command == "redact":
             if action.path in self.vfs and action.pattern:
-                matches = len(re.findall(action.pattern, self.vfs[action.path], re.IGNORECASE))
-                if matches > 0:
-                    self.vfs[action.path] = re.sub(action.pattern, "[REDACTED]", self.vfs[action.path], flags=re.IGNORECASE)
-                    self.redacted_pii_count += matches
-                    raw_reward = 0.5 * matches
-                    if self.redacted_pii_count >= self.total_pii_to_find:
-                        done, raw_reward, msg = True, 1.0, "Success!"
+                try:
+                    matches = list(re.finditer(action.pattern, self.vfs[action.path], re.IGNORECASE))
+                    if matches:
+                        # Nuke exploit check
+                        if any(len(m.group(0)) > 50 for m in matches):
+                            msg = "CRITICAL ERROR: Pattern too broad. You destroyed non-PII system data!"
+                            raw_reward = 0.0001 
+                        else:
+                            old_text = self.vfs[action.path]
+                            new_text = re.sub(action.pattern, "[REDACTED]", old_text, flags=re.IGNORECASE)
+                            
+                            # --- NEW: STRICT PII VERIFICATION ---
+                            # Check exactly how many REAL PII targets were erased by this redaction
+                            actual_pii_removed = 0
+                            for pii in list(self.active_pii):
+                                if pii in old_text and pii not in new_text:
+                                    actual_pii_removed += 1
+                                    self.active_pii.remove(pii)
+                                    
+                            if actual_pii_removed > 0:
+                                self.vfs[action.path] = new_text
+                                self.redacted_pii_count += actual_pii_removed
+                                raw_reward = 0.5 * actual_pii_removed
+                                
+                                if self.redacted_pii_count >= self.total_pii_to_find:
+                                    done, raw_reward, msg = True, 1.0, "Success!"
+                                else:
+                                    msg = f"Progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
+                            else:
+                                # They redacted innocent text! Reward hacking denied.
+                                msg = "Error: You redacted safe text but missed the PII! Check your regex."
+                                raw_reward = 0.0001
+                            # ------------------------------------
                     else:
-                        msg = f"Progress: {self.redacted_pii_count}/{self.total_pii_to_find}"
-                else:
-                    msg = "Pattern not found."
+                        msg = "Pattern not found."
+                except re.error:
+                    msg = "Error: Invalid regex pattern."
             else:
                 msg = "Invalid path/pattern."
         
@@ -143,7 +186,7 @@ class PrivacyJanitorEnvironment(Environment):
         return PrivacyJanitorObservation(
             current_path="/", files=list(self.vfs.keys()), 
             content_preview=content_preview, reward=reward, 
-            message=msg if 'msg' in locals() else "Step processed.", done=done
+            message=msg, done=done
         )
     
     @property
@@ -152,4 +195,4 @@ class PrivacyJanitorEnvironment(Environment):
             episode_id=self.episode_id, step_count=self.step_count, task_id=self.task_id,
             redacted_count=self.redacted_pii_count, total_to_find=self.total_pii_to_find,
             files_count=len(self.vfs), vfs_snapshot=self.vfs
-        )
+        )   
