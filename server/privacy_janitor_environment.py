@@ -31,6 +31,23 @@ class PrivacyJanitorEnvironment(Environment):
         self.task_id = "easy"
         self.episode_id = "initial"
 
+        # Phase 2 Validation Fix: Register tasks and their graders directly on the environment
+        self.supported_tasks = ["easy", "medium", "hard"]
+        self.graders = {
+            "easy": self.score,
+            "medium": self.score,
+            "hard": self.score
+        }
+
+    @property
+    def tasks(self):
+        """Return the dictionary of tasks and graders for OpenEnv validation."""
+        return self.graders
+        
+    def get_tasks(self):
+        """Fallback task getter for different OpenEnv validator versions."""
+        return self.tasks
+
     # FIX: Shifted reset() to the left so it's a proper class method
     def reset(
         self, 
