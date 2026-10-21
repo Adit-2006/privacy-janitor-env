@@ -9,13 +9,13 @@ pinned: false
 
 # Privacy Janitor Environment
 
-🧹 **Privacy Janitor Environment**
+**Privacy Janitor Environment**
 
 A Meta OpenEnv Hackathon submission.
 
 Privacy Janitor is a dynamic, scalable Reinforcement Learning (RL) environment built to the Meta OpenEnv specification. In this environment, an AI agent acts as an automated data privacy officer. Its mission is to navigate a simulated virtual file system (VFS), locate hidden Personally Identifiable Information (PII) among decoy files, and redact the sensitive data using regular expressions (regex) before hitting the step limit.
 
-## 🚀 Architecture & Compliance Highlights
+## Architecture & Compliance Highlights
 
 This submission was explicitly engineered to pass automated OpenEnv grading requirements.
 
@@ -24,7 +24,7 @@ This submission was explicitly engineered to pass automated OpenEnv grading requ
 - **Clean State Management**: Fully stateless between episodes. State is tracked via a Pydantic `@property` (`PrivacyJanitorState`), enabling reliable grader serialization and auditing.
 - **Modern Docker Build**: Uses a multi-stage BuildKit `Dockerfile` and the Hatchling build backend to package flat directories safely and satisfy strict package constraints.
 
-## 🕹️ Action & Observation Space
+## Action & Observation Space
 
 ### Sensible Action Space
 
@@ -45,7 +45,7 @@ The observation is designed to prevent cheating while giving the agent a clear p
 - `content_preview`: only populated when the agent explicitly uses `read_file`
 - `message`: instant feedback such as `Redacted 2 instance(s). Progress: 2/5`
 
-## 🧠 Reward Shaping & Episode Boundaries
+## Reward Shaping & Episode Boundaries
 
 This environment is optimized for stable RL training.
 
@@ -54,7 +54,7 @@ This environment is optimized for stable RL training.
 - **Epsilon Clamping**: All rewards are clamped between `0.0001` and `0.9999` to satisfy OpenEnv compliance and prevent gradient instability.
 - **Strict Episode Boundaries**: Episodes terminate on success or when the hard step limit of `20` steps is reached.
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```text
 privacy-janitor-env/
